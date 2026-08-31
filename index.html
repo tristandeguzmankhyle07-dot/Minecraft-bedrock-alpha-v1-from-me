@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Voxel Craft Alpha v1</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; touch-action: none; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
+    
+    /* UI Overlay Screens */
+    .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; 
+              flex-direction: column; justify-content: center; align-items: center; z-index: 10; background: rgba(0,0,0,0.75); color: #fff; }
+    h1 { font-size: 2rem; margin-bottom: 5px; text-shadow: 2px 2px #000; color: #55ff55; }
+    p { margin-bottom: 20px; font-size: 0.9rem; color: #aaa; }
+    
+    .menu-btn { width: 200px; padding: 12px; margin: 8px; background: #555; border: 2px solid #888; 
+                color: #fff; font-size: 1rem; font-weight: bold; text-align: center; cursor: pointer; }
+    .menu-btn:active { background: #777; }
+    
+    select { width: 200px; padding: 10px; margin-bottom: 15px; background: #333; color: #fff; border: 1px solid #777; font-size: 1rem; }
+    
+    /* In-Game Touch Controls */
+    #hud { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+    #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; margin-top: -5px; margin-left: -5px; 
+                 color: rgba(255,255,255,0.8); font-size: 20px; text-align: center; line-height: 10px; }
+    
+    /* Mobile Controls Overlay */
+    .touch-btn { pointer-events: auto; position: absolute; background: rgba(0,0,0,0.4); border: 2px solid rgba(255,255,255,0.4); 
+                 color: white; font-weight: bold; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+    .touch-btn:active { background: rgba(255,255,255,0.4); }
+
+    /* Left D-Pad */
+    #btn-up { width: 50px; height: 50px; bottom: 110px; left: 65px; }
+    #btn-down { width: 50px; height: 50px; bottom: 10px; left: 65px; }
+    #btn-left { width: 50px; height: 50px; bottom: 60px; left: 15px; }
+    #btn-right { width: 50px; height: 50px; bottom: 60px; left: 115px; }
+
+    /* Right Action Buttons */
+    #btn-break { width: 65px; height: 65px; bottom: 85px; right: 85px; background: rgba(200,50,50,0.5); }
+    #btn-place { width: 65px; height: 65px; bottom: 85px; right: 10px; background: rgba(50,200,50,0.5); }
+    #btn-jump { width: 65px; height: 50px; bottom: 20px; right: 47px; background: rgba(200,200,50,0.5); }
+    
+    #canvas-container { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+
+  <div id="main-menu" class="screen">
+    <h1>VOXEL CRAFT</h1>
+    <p>Alpha v1.0 (Mobile)</p>
+    <div class="menu-btn" id="play-btn">PLAY</div>
+    <div class="menu-btn" id="settings-btn">SETTINGS</div>
+  </div>
+
+  <div id="settings-menu" class="screen" style="display: none;">
+    <h1>SETTINGS</h1>
+    <p>Graphics Mode</p>
+    <select id="graphics-select">
+      <option value="simple">Simple</option>
+      <option value="fancy" selected>Fancy</option>
+      <option value="vibrant">Vibrant</option>
+    </select>
+    <div class="menu-btn" id="back-btn">BACK</div>
+  </div>
+
+  <div id="hud">
+    <div id="crosshair">+</div>
+    <div id="btn-up" class="touch-btn">▲</div>
+    <div id="btn-down" class="touch-btn">▼</div>
+    <div id="btn-left" class="touch-btn">◄</div>
+    <div id="btn-right" class="touch-btn">►</div>
+
+    <div id="btn-break" class="touch-btn">MINE</div>
+    <div id="btn-place" class="touch-btn">PLACE</div>
+    <div id="btn-jump" class="touch-btn">JUMP</div>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    // --- Engine & Scene Variables ---
+    let scene, camera, renderer;
+    let blocks = [];
+    let graphicsPreset = "fancy";
+
+    // --- Movement & State ---
+    let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+    let velocityY = 0;
+    let isGrounded = false;
+    const gravity = -0.015;
+    const speed = 0.08;
+
+    // --- Touch Camera Rotation Tracking ---
+    let touchStartX = 0, touchStartY = 0;
+    let cameraYaw = 0, cameraPitch = 0;
+
+    // --- Block Materials ---
+    const grassMaterial = [
+      new THREE.MeshLambertMaterial({ color: 0x5c4033 }), // right
+      new THREE.MeshLambertMaterial({ color: 0x5c4033 }), // left
+      new THREE.MeshLambertMaterial({ color: 0x4a8505 }), // top (grass)
+      new THREE.MeshLambertMaterial({ color: 0x5c4033 }), // bottom
+      new THREE.MeshLambertMaterial({ color: 0x5c4033 }), // front
+      new THREE.MeshLambertMaterial({ color: 0x5c4033 })  // back
+    ];
+    const blockGeometry = new THREE.BoxGeometry(1, 1, 1);
+
+    // Initialize 3D World
+    function initWorld() {
+      const container = document.getElementById('canvas-container');
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 3, 5);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      container.appendChild(renderer.domElement);
+
+      // Lighting
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+      ambientLight.name = "ambient";
+      scene.add(ambientLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(20, 40, 20);
+      dirLight.name = "sun";
+      scene.add(dirLight);
+
+      // Generate Flat Alpha World Floor (12x12 grid)
+      for (let x = -6; x <= 6; x++) {
+        for (let z = -6; z <= 6; z++) {
+          const block = new THREE.Mesh(blockGeometry, grassMaterial);
+          block.position.set(x, 0, z);
+          scene.add(block);
+          blocks.push(block);
+        }
+      }
+
+      applyGraphicsPreset();
+      setupTouchControls();
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    // --- Graphics Presets Implementation ---
+    function applyGraphicsPreset() {
+      if (!scene) return;
+      const ambient = scene.getObjectByName("ambient");
+      const sun = scene.getObjectByName("sun");
+
+      if (graphicsPreset === "simple") {
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = null;
+        if (ambient) ambient.intensity = 0.9;
+        if (sun) sun.intensity = 0.2;
+      } else if (graphicsPreset === "fancy") {
+        scene.background = new THREE.Color(0x7ec0ee);
+        scene.fog = new THREE.FogExp2(0x7ec0ee, 0.04);
+        if (ambient) ambient.intensity = 0.4;
+        if (sun) sun.intensity = 0.8;
+      } else if (graphicsPreset === "vibrant") {
+        scene.background = new THREE.Color(0xff9944);
+        scene.fog = new THREE.FogExp2(0xff7733, 0.05);
+        if (ambient) ambient.intensity = 0.3;
+        if (sun) sun.intensity = 1.3;
+      }
+    }
+
+    // --- Controls Setup ---
+    function setupTouchControls() {
+      const bindBtn = (id, onPress, onRelease) => {
+        const el = document.getElementById(id);
+        el.addEventListener('touchstart', (e) => { e.preventDefault(); onPress(); });
+        el.addEventListener('touchend', (e) => { e.preventDefault(); onRelease(); });
+      };
+
+      bindBtn('btn-up', () => moveForward = true, () => moveForward = false);
+      bindBtn('btn-down', () => moveBackward = true, () => moveBackward = false);
+      bindBtn('btn-left', () => moveLeft = true, () => moveLeft = false);
+      bindBtn('btn-right', () => moveRight = true, () => moveRight = false);
+
+      document.getElementById('btn-jump').addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (isGrounded) { velocityY = 0.25; isGrounded = false; }
+      });
+
+      document.getElementById('btn-break').addEventListener('touchstart', (e) => { e.preventDefault(); breakBlock(); });
+      document.getElementById('btn-place').addEventListener('touchstart', (e) => { e.preventDefault(); placeBlock(); });
+
+      // Drag Right Side of Screen for Camera Rotation
+      window.addEventListener('touchstart', (e) => {
+        if (!e.target.classList.contains('touch-btn') && !e.target.classList.contains('menu-btn')) {
+          touchStartX = e.touches[0].clientX;
+          touchStartY = e.touches[0].clientY;
+        }
+      });
+
+      window.addEventListener('touchmove', (e) => {
+        if (!e.target.classList.contains('touch-btn') && e.touches.length > 0) {
+          const deltaX = e.touches[0].clientX - touchStartX;
+          const deltaY = e.touches[0].clientY - touchStartY;
+          touchStartX = e.touches[0].clientX;
+          touchStartY = e.touches[0].clientY;
+
+          cameraYaw -= deltaX * 0.005;
+          cameraPitch -= deltaY * 0.005;
+          cameraPitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, cameraPitch));
+
+          camera.rotation.set(0, 0, 0);
+          camera.rotation.y = cameraYaw;
+          camera.rotation.x = cameraPitch;
+        }
+      });
+    }
+
+    // --- Block Breaking & Placing Logic ---
+    const raycaster = new THREE.Raycaster();
+    function getIntersectedBlock() {
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const intersects = raycaster.intersectObjects(blocks);
+      return intersects.length > 0 ? intersects[0] : null;
+    }
+
+    function breakBlock() {
+      const hit = getIntersectedBlock();
+      if (hit) {
+        scene.remove(hit.object);
+        blocks = blocks.filter(b => b !== hit.object);
+      }
+    }
+
+    function placeBlock() {
+      const hit = getIntersectedBlock();
+      if (hit) {
+        const newPos = hit.object.position.clone().add(hit.face.normal);
+        const newBlock = new THREE.Mesh(blockGeometry, grassMaterial);
+        newBlock.position.copy(newPos);
+        scene.add(newBlock);
+        blocks.push(newBlock);
+      }
+    }
+
+    // --- Render Loop & Physics ---
+    function animate() {
+      requestAnimationFrame(animate);
+
+      // Horizontal Movement
+      const forwardVec = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
+      const sideVec = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
+
+      if (moveForward) camera.position.addScaledVector(forwardVec, speed);
+      if (moveBackward) camera.position.addScaledVector(forwardVec, -speed);
+      if (moveLeft) camera.position.addScaledVector(sideVec, -speed);
+      if (moveRight) camera.position.addScaledVector(sideVec, speed);
+
+      // Simple Floor Gravity / Collision
+      camera.position.y += velocityY;
+      if (camera.position.y <= 2.5) {
+        camera.position.y = 2.5;
+        velocityY = 0;
+        isGrounded = true;
+      } else {
+        velocityY += gravity;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // --- UI Button Event Listeners ---
+    document.getElementById('play-btn').addEventListener('click', () => {
+      document.getElementById('main-menu').style.display = 'none';
+      document.getElementById('hud').style.display = 'block';
+      if (!scene) { initWorld(); animate(); }
+    });
+
+    document.getElementById('settings-btn').addEventListener('click', () => {
+      document.getElementById('main-menu').style.display = 'none';
+      document.getElementById('settings-menu').style.display = 'flex';
+    });
+
+    document.getElementById('back-btn').addEventListener('click', () => {
+      document.getElementById('settings-menu').style.display = 'none';
+      document.getElementById('main-menu').style.display = 'flex';
+    });
+
+    document.getElementById('graphics-select').addEventListener('change', (e) => {
+      graphicsPreset = e.target.value;
+      applyGraphicsPreset();
+    });
+  </script>
+</body>
+</html>
